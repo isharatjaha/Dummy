@@ -1,0 +1,111 @@
+/*------------------------------------------------------------
+Author:        Isharat Jaha
+Company:       Salesforce
+Description:   ApplicationLogCreation_Queueable Class to insert Log records in bulk. 
+                
+Test Class:    ApplicationLogCreation_Queueable_Test
+
+History
+<Date>      <Authors Name>     <Brief Description of Change>
+23/12/2021  Isharat Jaha        Created
+------------------------------------------------------------*/
+public class ApplicationLogCreation_Queueable implements Queueable {
+    private static String CLASS_NAME = 'ApplicationLogUtility';
+    private static String LOG_MESSAGE_FUNCTION = 'logMessage';
+    private static String DEBUG_LEVEL_ERROR = 'Error';
+    List<ApplicationLogMessage> logMessageList ;
+    public Static Integer chunkSize = 100;
+    public Static Integer channingCounter = 1;
+    public ApplicationLogCreation_Queueable(List<ApplicationLogMessage> logMessageList){
+        this.logMessageList = logMessageList;
+    }
+    public void execute(QueueableContext context) {
+        if(logMessageList == NULL || logMessageList.size() == 0){
+            return;
+        }
+        
+        List<Application_Log__c> logList = new List<Application_Log__c>();
+        if(logMessageList.size() > chunkSize){
+            for(Integer i = 0; i < chunkSize ; i++){
+                Application_Log__c logSObjectRecord = getApplicationLogSObjectRecord(logMessageList[i]);
+                if(logSObjectRecord != null){
+                    logList.add(logSObjectRecord);
+                }
+                logMessageList.remove(i);
+            }
+            
+        }else{
+            for(ApplicationLogMessage log : logMessageList){
+            Application_Log__c logSObjectRecord = getApplicationLogSObjectRecord(log);
+                if(logSObjectRecord != null){
+                    logList.add(logSObjectRecord);
+                }
+        	}
+        }
+        
+        
+        
+        //Convert wrapper class list to sObject list
+        /*for(ApplicationLogMessage log : logMessageList){
+            Application_Log__c logSObjectRecord = getApplicationLogSObjectRecord(log);
+            
+            if(logSObjectRecord != null){
+                logList.add(logSObjectRecord);
+            }
+        }*/
+        Database.SaveResult[] srArr = Database.insert(logList, false);
+        List<Application_Log__c> failedLogRecords = new List<Application_Log__c>();
+        Integer logCounter = 0;
+        
+        // Loop through all the Log records to see if any of them was failed. Create list of Log recrods for these failed records.
+        for(Database.SaveResult sr : srArr){
+            if(!sr.isSuccess()){
+                ApplicationLogMessage logMessage = new ApplicationLogMessage(CLASS_NAME,
+                                                                             LOG_MESSAGE_FUNCTION,
+                                                                             null,
+                                                                             null,
+                                                                             logMessageList[logCounter].referenceId,
+                                                                             null,
+                                                                             sr.getErrors()[0].getMessage() + 'Original Error :' + logMessageList[logCounter].logMessage,
+                                                                             DEBUG_LEVEL_ERROR,
+                                                                             null,
+                                                                             0
+                                                                            );
+                
+                failedLogRecords.add(getApplicationLogSObjectRecord(logMessage));
+            }
+            logCounter++;
+        }
+        
+        //Insert Log records for the failed log records.
+        if(failedLogRecords.size() > 0){
+            Database.insert(failedLogRecords, false);
+        }
+        
+        
+        channingCounter++;
+        if(logMessageList.size() != 0 && channingCounter <= 5){
+            System.enqueueJob(new ApplicationLogCreation_Queueable(logMessageList));
+        }else{
+            channingCounter --;
+        }
+    }
+    private static Application_Log__c getApplicationLogSObjectRecord(ApplicationLogMessage logMessage){
+        if(logMessage != null){
+            Application_Log__c log = new Application_Log__c(Debug_Level__c = logMessage.debugLevel,
+                                                            Integration_Payload__c = logMessage.payLoad,
+                                                            Log_Code__c = logMessage.logCode,
+                                                            Message__c = logMessage.logMessage,
+                                                            Reference_Id__c = logMessage.referenceId,
+                                                            Reference_Info__c = logMessage.referenceInfo,
+                                                            Source__c = logMessage.source,
+                                                            Source_Function__c = logMessage.sourceFunction,
+                                                            Stack_Trace__c = logMessage.ex,
+                                                            Timer__c = logMessage.timeTaken);
+            return log;
+            
+        }
+        
+        return null;
+    }
+}
